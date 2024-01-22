@@ -4,7 +4,6 @@ using System.IO;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
-using System.Collections.Generic;
 using JetBrains.Annotations;
 using Newtonsoft.Json;
 using osu.Framework.Platform;
@@ -52,7 +51,7 @@ namespace osu.Framework.Input.Handlers.Mouse
 
             bool waiting_fblink = false;
             bool draging = false;
-            int last_blink_timestamp = 0;
+            long last_blink_timestamp = 0;
 
             // smoth filter
             // 10 - for menu is ok, but for gameplay it is too much
@@ -89,7 +88,7 @@ namespace osu.Framework.Input.Handlers.Mouse
                 if (lastTimestamp == 0) goto skip_filter;
 
                 // if blink happened
-                int dt = decodedData.TimestampNum - lastTimestamp;
+                long dt = decodedData.TimestampNum - lastTimestamp;
                 if (dt > blink_time && dt < max_blink_time)
                 {
                     if (draging)
@@ -117,7 +116,7 @@ namespace osu.Framework.Input.Handlers.Mouse
                     frames_after_blinking_counter = 0;
 
                 }
-                // blink did not happen 
+                // blink did not happen
                 else if (waiting_fblink && decodedData.TimestampNum - last_blink_timestamp >= wait_fblink)
                 {
                     NoPositionPeriodEnded?.Invoke(MouseButton.Left);
