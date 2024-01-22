@@ -56,10 +56,12 @@ namespace osu.Framework.Input.Handlers.Mouse
 
             // smoth filter
             // 10 - for menu is ok, but for gameplay it is too much
-            const int frames_after_blinking = 16;
-            const double old_post_coef_start = 0.8, new_pos_coef_start = 1 - old_post_coef_start;
+            const uint frames_after_blinking_froze = 5;
+            const uint frames_after_blinking = 11 + frames_after_blinking_froze;
+            const double old_post_coef_start = 0.80, new_pos_coef_start = 1 - old_post_coef_start;
+            const double coef_delta = 0.05;
 
-            int frames_after_blinking_counter = 0;
+            uint frames_after_blinking_counter = 0;
             Vector2 old_position = new Vector2(0, 0);
             Vector2 pre_blink_position = new Vector2(0, 0);
             bool after_blink = false;
@@ -129,11 +131,25 @@ namespace osu.Framework.Input.Handlers.Mouse
                 if (after_blink && frames_after_blinking_counter < frames_after_blinking)
                 {
                     fout.Write(Encoding.ASCII.GetBytes($"Waiting for blink: {decodedData.TimestampNum} - {last_blink_timestamp} >= {wait_fblink}.\n"));
-                    var new_pos_coef = new_pos_coef_start + (1 - new_pos_coef_start) / frames_after_blinking;
-                    var old_post_coef = old_post_coef_start - (old_post_coef_start) / frames_after_blinking;
+
+                    if (frames_after_blinking_counter <= frames_after_blinking_froze)
+                    {
+                        frames_after_blinking_counter++;
+                        continue;
+                    }
+
+                    //var new_pos_coef = 0.99;
+                    //var old_post_coef = 0.01;
+
+
+                    var new_pos_coef = new_pos_coef_start + (frames_after_blinking_counter - frames_after_blinking_froze) * coef_delta;
+                    var old_post_coef = old_post_coef_start - (frames_after_blinking_counter - frames_after_blinking_froze) * coef_delta;
+
+                    var measured_position = new Vector2(decodedData.X * bounds.Width + bounds.Left, decodedData.Y * bounds.Height + bounds.Top);
+
                     old_position = new Vector2(
-                                              (float)(old_post_coef * old_position.X + new_pos_coef * pre_blink_position.X),
-                                              (float)(old_post_coef * old_position.Y + new_pos_coef * pre_blink_position.Y)
+                                              (float)(old_post_coef * measured_position.X + new_pos_coef * pre_blink_position.X),
+                                              (float)(old_post_coef * measured_position.Y + new_pos_coef * pre_blink_position.Y)
                                               );
 
                     frames_after_blinking_counter++;
