@@ -10,6 +10,6 @@ namespace osu.Framework.Input.Handlers.Mouse
         public bool Valid { get; set; }
         public string Timestamp { get; set; } = default!;
 
-        public int TimestampNum => int.Parse(Timestamp);
+        public long TimestampNum => long.Parse(Timestamp);
     }
 }

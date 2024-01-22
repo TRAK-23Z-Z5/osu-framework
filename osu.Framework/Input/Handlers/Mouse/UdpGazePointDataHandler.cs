@@ -20,7 +20,7 @@ namespace osu.Framework.Input.Handlers.Mouse
 
         private readonly UdpClient server;
 
-        private int lastTimestamp;
+        private long lastTimestamp;
         private Rectangle bounds;
 
         private FileStream fout;
