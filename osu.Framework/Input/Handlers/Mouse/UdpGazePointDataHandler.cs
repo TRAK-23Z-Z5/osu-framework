@@ -18,13 +18,33 @@ namespace osu.Framework.Input.Handlers.Mouse
         public static UdpGazePointDataHandler Instance = new UdpGazePointDataHandler(new IPEndPoint(IPAddress.Loopback, 8052));
 
         public event Action<Vector2>? AbsolutePositionChanged;
-        public event Action<MouseButton>? NoPositionPeriodStarted;
-        public event Action<MouseButton>? NoPositionPeriodEnded;
+        public event Action<MouseButton>? DragStarted;
+        public event Action<MouseButton>? DragEnded;
 
         private readonly UdpClient server;
 
-        private long lastTimestamp;
+        private const uint min_blink_time = 150; //ms
+        private const uint max_blink_time = 600; //ms
+        private const uint max_time_between_blinks = 400;
+        private const uint frames_after_blinking = 16; // 10 - for menu is ok, but for gameplay it is too much
+        private const uint frozen_frames_after_blinking = 5;
+        private const uint averaged_frames_after_blinking = frames_after_blinking - frozen_frames_after_blinking; // 10 - for menu is ok, but for gameplay it is too much
+        private const double old_post_coef_start = 0.80;
+        private const double new_pos_coef_start = 1 - old_post_coef_start;
+        private const double coef_delta = old_post_coef_start / averaged_frames_after_blinking;
+
         private Rectangle bounds;
+
+        private long lastTimestamp;
+
+        private bool hasBlinkedOnce;
+        private bool hasBlinkedTwice;
+        private long lastBlinkTimestamp;
+
+        private int framesAfterBlinkingCounter;
+        private Vector2 oldPosition = new Vector2(0, 0);
+        private Vector2 preBlinkPosition = new Vector2(0, 0);
+        private bool isAfterBlink;
 
         private FileStream fout;
 
@@ -42,124 +62,90 @@ namespace osu.Framework.Input.Handlers.Mouse
 
         public void Receive()
         {
-            //Queue<GazePointData> dataQueue = new Queue<GazePointData>();
-            //int queueSize = 7;
-
-            const uint blink_time = 150; //ms
-            const uint max_blink_time = 600; //ms
-            const uint wait_fblink = 400;
-
-            bool waiting_fblink = false;
-            bool draging = false;
-            long last_blink_timestamp = 0;
-
-            // smoth filter
-            // 10 - for menu is ok, but for gameplay it is too much
-            const uint frames_after_blinking_froze = 5;
-            const uint frames_after_blinking = 11 + frames_after_blinking_froze;
-            const double old_post_coef_start = 0.80, new_pos_coef_start = 1 - old_post_coef_start;
-            const double coef_delta = 0.05;
-
-            uint frames_after_blinking_counter = 0;
-            Vector2 old_position = new Vector2(0, 0);
-            Vector2 pre_blink_position = new Vector2(0, 0);
-            bool after_blink = false;
-
             while (true)
             {
                 var sender = new IPEndPoint(IPAddress.Any, 0);
-                var data = server.Receive(ref sender);
-                var stringData = Encoding.ASCII.GetString(data);
-                Console.WriteLine($"Received from {sender}: {stringData}");
+                byte[] data = server.Receive(ref sender);
+                string stringData = Encoding.ASCII.GetString(data);
                 var decodedData = JsonConvert.DeserializeObject<GazePointData>(stringData);
 
                 if (decodedData == null || !decodedData.Valid)
                 {
                     fout.Write(Encoding.ASCII.GetBytes("Skipping invalid data.\n"));
-                    return;
+                    continue;
                 }
 
                 if (decodedData.TimestampNum < lastTimestamp)
                 {
                     fout.Write(Encoding.ASCII.GetBytes($"Skipping too old data: {decodedData.TimestampNum} < {lastTimestamp}.\n"));
-                    return;
+                    continue;
                 }
 
-                if (lastTimestamp == 0) goto skip_filter;
-
-                // if blink happened
                 long dt = decodedData.TimestampNum - lastTimestamp;
-                if (dt > blink_time && dt < max_blink_time)
+                var measuredPosition = new Vector2(decodedData.X * bounds.Width + bounds.Left, decodedData.Y * bounds.Height + bounds.Top);
+
+                if (dt > min_blink_time && dt < max_blink_time)
                 {
-                    if (draging)
+                    if (hasBlinkedTwice)
                     {
                         // second blink happened - start draging
-                        NoPositionPeriodEnded?.Invoke(MouseButton.Left);
-                        draging = false;
+                        DragEnded?.Invoke(MouseButton.Left);
+                        hasBlinkedTwice = false;
                     }
-                    else if (waiting_fblink)
+                    else if (hasBlinkedOnce)
                     {
                         // start click&drag
-                        NoPositionPeriodStarted?.Invoke(MouseButton.Left);
-                        draging = true;
-                        waiting_fblink = false;
+                        DragStarted?.Invoke(MouseButton.Left);
+                        hasBlinkedTwice = true;
+                        hasBlinkedOnce = false;
                     }
                     else
                     {
                         // click down
-                        NoPositionPeriodStarted?.Invoke(MouseButton.Left);
-                        waiting_fblink = true;
-                        last_blink_timestamp = decodedData.TimestampNum;
+                        DragStarted?.Invoke(MouseButton.Left);
+                        hasBlinkedOnce = true;
+                        lastBlinkTimestamp = decodedData.TimestampNum;
                     }
-                    after_blink = true;
-                    pre_blink_position = old_position;
-                    frames_after_blinking_counter = 0;
 
+                    isAfterBlink = true;
+                    preBlinkPosition = oldPosition;
+                    framesAfterBlinkingCounter = 0;
                 }
                 // blink did not happen
-                else if (waiting_fblink && decodedData.TimestampNum - last_blink_timestamp >= wait_fblink)
+                else if (hasBlinkedOnce && decodedData.TimestampNum - lastBlinkTimestamp >= max_time_between_blinks)
                 {
-                    NoPositionPeriodEnded?.Invoke(MouseButton.Left);
-                    waiting_fblink = false;
-                    last_blink_timestamp = 0; // not necessary probably
+                    DragEnded?.Invoke(MouseButton.Left);
+                    hasBlinkedOnce = false;
                 }
 
-            skip_filter:
                 lastTimestamp = decodedData.TimestampNum;
 
-                if (after_blink && frames_after_blinking_counter < frames_after_blinking)
+                if (isAfterBlink && framesAfterBlinkingCounter < frames_after_blinking)
                 {
-                    fout.Write(Encoding.ASCII.GetBytes($"Waiting for blink: {decodedData.TimestampNum} - {last_blink_timestamp} >= {wait_fblink}.\n"));
+                    fout.Write(Encoding.ASCII.GetBytes($"Waiting for blink: {decodedData.TimestampNum} - {lastBlinkTimestamp} >= {frames_after_blinking}.\n"));
 
-                    if (frames_after_blinking_counter <= frames_after_blinking_froze)
+                    if (framesAfterBlinkingCounter > frozen_frames_after_blinking)
                     {
-                        frames_after_blinking_counter++;
-                        continue;
+                        long averagedFramesAfterBlinkingCounter = framesAfterBlinkingCounter - frozen_frames_after_blinking;
+                        double newPosCoef = new_pos_coef_start + averagedFramesAfterBlinkingCounter * coef_delta;
+                        double oldPostCoef = old_post_coef_start - averagedFramesAfterBlinkingCounter * coef_delta;
+
+                        oldPosition = new Vector2(
+                            (float)(newPosCoef * measuredPosition.X + oldPostCoef * preBlinkPosition.X),
+                            (float)(newPosCoef * measuredPosition.Y + oldPostCoef * preBlinkPosition.Y)
+                        );
                     }
 
-                    //var new_pos_coef = 0.99;
-                    //var old_post_coef = 0.01;
-
-
-                    var new_pos_coef = new_pos_coef_start + (frames_after_blinking_counter - frames_after_blinking_froze) * coef_delta;
-                    var old_post_coef = old_post_coef_start - (frames_after_blinking_counter - frames_after_blinking_froze) * coef_delta;
-
-                    var measured_position = new Vector2(decodedData.X * bounds.Width + bounds.Left, decodedData.Y * bounds.Height + bounds.Top);
-
-                    old_position = new Vector2(
-                                              (float)(old_post_coef * measured_position.X + new_pos_coef * pre_blink_position.X),
-                                              (float)(old_post_coef * measured_position.Y + new_pos_coef * pre_blink_position.Y)
-                                              );
-
-                    frames_after_blinking_counter++;
+                    framesAfterBlinkingCounter++;
                 }
                 else
                 {
-                    after_blink = false;
-                    old_position = new Vector2(decodedData.X * bounds.Width + bounds.Left, decodedData.Y * bounds.Height + bounds.Top);
+                    isAfterBlink = false;
+                    oldPosition = measuredPosition;
                 }
-                fout.Write(Encoding.ASCII.GetBytes($"Position_: {old_position}\n"));
-                AbsolutePositionChanged?.Invoke(old_position);
+
+                fout.Write(Encoding.ASCII.GetBytes($"Position: {oldPosition}\n"));
+                AbsolutePositionChanged?.Invoke(oldPosition);
             }
         }
     }
