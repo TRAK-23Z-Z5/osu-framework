@@ -15,7 +15,7 @@ namespace osu.Framework.Input.Handlers.Mouse
     [PublicAPI]
     public class UdpGazePointDataHandler
     {
-        public static UdpGazePointDataHandler Instance = new UdpGazePointDataHandler(new IPEndPoint(IPAddress.Loopback, 8052));
+        public static UdpGazePointDataHandler Instance = new UdpGazePointDataHandler(new IPEndPoint(IPAddress.Any, 8052));
 
         public event Action<Vector2>? AbsolutePositionChanged;
         public event Action<MouseButton>? DragStarted;
